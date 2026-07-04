@@ -1,152 +1,94 @@
 (function () {
-  if (window.__ankiCaptureOverlayLoaded) {
-    return;
-  }
-  window.__ankiCaptureOverlayLoaded = true;
+  if (window.__ankiCaptureContentLoaded) return;
+  window.__ankiCaptureContentLoaded = true;
 
-  let overlay = null;
-  let selectionBox = null;
-  let startX = 0;
-  let startY = 0;
-  let currentX = 0;
-  let currentY = 0;
-  let isDrawing = false;
-  let listenersAttached = false;
+  const TOOLBAR_ID = 'anki-capture-toolbar';
+  let toolbarVisible = false;
+  let activeMode = null;
+  let selectionListenerAttached = false;
 
-  function createOverlay() {
-    if (overlay) {
-      return overlay;
-    }
+  function ensureToolbar() {
+    let toolbar = document.getElementById(TOOLBAR_ID);
+    if (toolbar) return toolbar;
+    
+    toolbar = document.createElement('div');
+    toolbar.id = TOOLBAR_ID;
+    toolbar.className = 'anki-capture-toolbar';
+    toolbar.innerHTML = `
+      <div class="anki-capture-toolbar__title">Capture Mode Active</div>
+      <div class="anki-capture-toolbar__actions">
+        <button type="button" class="anki-capture-toolbar__button" data-mode="text">Text Selection</button>
+        <button type="button" class="anki-capture-toolbar__button" data-mode="area">Area Selection</button>
+        <button type="button" class="anki-capture-toolbar__button" data-mode="cancel">Cancel</button>
+      </div>
+    `;
 
-    overlay = document.createElement('div');
-    overlay.id = 'anki-capture-overlay';
-    overlay.className = 'anki-capture-overlay';
+    toolbar.addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-mode]');
+      if (!button) return;
+      setMode(button.getAttribute('data-mode'));
+    });
 
-    selectionBox = document.createElement('div');
-    selectionBox.id = 'anki-capture-selection';
-    selectionBox.className = 'anki-capture-selection';
-
-    overlay.appendChild(selectionBox);
-    document.body.appendChild(overlay);
-    return overlay;
-  }
-
-  function removeOverlay() {
-    if (overlay) {
-      overlay.remove();
-      overlay = null;
-      selectionBox = null;
-    }
+    document.body.appendChild(toolbar);
+    return toolbar;
   }
 
-  function updateSelectionBox() {
-    if (!selectionBox) {
-      return;
-    }
-
-    const width = Math.abs(currentX - startX);
-    const height = Math.abs(currentY - startY);
-    const left = Math.min(startX, currentX);
-    const top = Math.min(startY, currentY);
-
-    selectionBox.style.left = `${left}px`;
-    selectionBox.style.top = `${top}px`;
-    selectionBox.style.width = `${width}px`;
-    selectionBox.style.height = `${height}px`;
-    selectionBox.style.display = width > 0 && height > 0 ? 'block' : 'none';
+  function showToolbar() {
+    ensureToolbar().style.display = 'block';
+    toolbarVisible = true;
   }
 
-  function attachSelectionListeners() {
-    if (listenersAttached) {
-      return;
-    }
-
-    window.addEventListener('mousemove', moveSelection);
-    window.addEventListener('mouseup', finishSelection);
-    listenersAttached = true;
+  function hideToolbar() {
+    const toolbar = document.getElementById(TOOLBAR_ID);
+    if (toolbar) toolbar.style.display = 'none';
+    toolbarVisible = false;
+    activeMode = null;
   }
 
-  function startSelection(event) {
-    event.preventDefault();
-    isDrawing = true;
-    startX = event.clientX;
-    startY = event.clientY;
-    currentX = startX;
-    currentY = startY;
-    createOverlay();
-    overlay.style.display = 'block';
-    updateSelectionBox();
-  }
+  async function captureTextSelection() {
+    const selection = window.getSelection();
+    const selectedText = selection ? selection.toString().trim() : '';
+    if (!selectedText) return;
 
-  function moveSelection(event) {
-    if (!isDrawing) {
-      return;
-    }
-    currentX = event.clientX;
-    currentY = event.clientY;
-    updateSelectionBox();
-  }
-
-  async function finishSelection(event) {
-    if (!isDrawing) {
-      return;
-    }
-
-    isDrawing = false;
-    currentX = event.clientX;
-    currentY = event.clientY;
-    updateSelectionBox();
-
-    const width = Math.abs(currentX - startX);
-    const height = Math.abs(currentY - startY);
-
-    if (width < 5 || height < 5) {
-      removeOverlay();
-      return;
-    }
-
-    const x = Math.min(startX, currentX);
-    const y = Math.min(startY, currentY);
-    const selection = {
-      x,
-      y,
-      width,
-      height
-    };
-
-    removeOverlay();
-
-    const capturedData = await chrome.runtime.sendMessage({
-      type: 'capture-area-selection',
-      selection,
+    await chrome.runtime.sendMessage({
+      type: 'capture-text',
+      selectedText,
       pageTitle: document.title,
       pageUrl: window.location.href,
       timestamp: new Date().toISOString()
     });
+    hideToolbar();
+  }
 
-    if (capturedData?.ok) {
-      console.log(capturedData.data);
+  // FIXED: Restored the missing text listener function
+  function attachSelectionListener() {
+    if (selectionListenerAttached) return;
+
+    document.addEventListener('mouseup', () => {
+      if (!toolbarVisible || activeMode !== 'text') return;
+      captureTextSelection();
+    });
+
+    selectionListenerAttached = true;
+  }
+
+  function setMode(mode) {
+    activeMode = mode;
+    if (mode === 'text') { attachSelectionListener(); return; }
+    if (mode === 'area') {
+      window.dispatchEvent(new CustomEvent('anki-capture-mode', { detail: { mode: 'area' } }));
+      return;
+    }
+    if (mode === 'cancel') {
+      window.dispatchEvent(new CustomEvent('anki-capture-mode', { detail: { mode: 'cancel' } }));
+      hideToolbar();
     }
   }
 
-  function enableAreaSelection() {
-    const overlayElement = createOverlay();
-    overlayElement.style.display = 'block';
-    attachSelectionListeners();
-    overlayElement.addEventListener('mousedown', startSelection);
-  }
-
-  function disableAreaSelection() {
-    removeOverlay();
-    isDrawing = false;
-  }
-
-  window.addEventListener('anki-capture-mode', (event) => {
-    const mode = event.detail?.mode;
-    if (mode === 'area') {
-      enableAreaSelection();
-    } else if (mode === 'cancel') {
-      disableAreaSelection();
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.type === 'capture-start') {
+      showToolbar();
+      attachSelectionListener();
     }
   });
 })();

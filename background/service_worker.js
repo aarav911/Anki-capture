@@ -8,15 +8,9 @@ async function requestAnki(payload) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
-
-  if (!response.ok) {
-    throw new Error(`AnkiConnect request failed with status ${response.status}`);
-  }
-
+  if (!response.ok) throw new Error(`AnkiConnect status ${response.status}`);
   const data = await response.json();
-  if (data.error) {
-    throw new Error(data.error);
-  }
+  if (data.error) throw new Error(data.error);
   return data.result;
 }
 
@@ -40,8 +34,8 @@ async function sendDatasetEntryToLocalFile(entry) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(entry)
     });
-  } catch (error) {
-    console.warn('Unable to append dataset entry to local file:', error.message);
+  } catch (e) {
+    console.warn('Unable to append dataset entry:', e.message);
   }
 }
 
@@ -65,158 +59,140 @@ async function cropImageRegion(dataUrl, selection) {
   const response = await fetch(dataUrl);
   const blob = await response.blob();
   const imageBitmap = await createImageBitmap(blob);
-  const canvas = new OffscreenCanvas(selection.width, selection.height);
+  
+  const width = Math.max(1, Math.floor(selection.width));
+  const height = Math.max(1, Math.floor(selection.height));
+  
+  const canvas = new OffscreenCanvas(width, height);
   const context = canvas.getContext('2d');
 
   context.drawImage(
     imageBitmap,
-    selection.x,
-    selection.y,
-    selection.width,
-    selection.height,
+    Math.floor(selection.x),
+    Math.floor(selection.y),
+    width,
+    height,
     0,
     0,
-    selection.width,
-    selection.height
+    width,
+    height
   );
 
   const croppedBlob = await canvas.convertToBlob({ type: 'image/png' });
   const arrayBuffer = await croppedBlob.arrayBuffer();
   let binary = '';
   const bytes = new Uint8Array(arrayBuffer);
-  bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte);
-  });
-
-  const base64 = btoa(binary);
-  return `data:image/png;base64,${base64}`;
+  bytes.forEach(b => binary += String.fromCharCode(b));
+  return `data:image/png;base64,${btoa(binary)}`;
 }
 
+// Fixed Router Framework: Natively wraps the runtime context to cleanly pass asynchronous messages
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  const handleMessage = async () => {
-    try {
-      switch (message.type) {
-        case 'anki-ping': {
-          const decks = await requestAnki({ action: 'deckNames', version: 6 });
-          sendResponse({ ok: true, data: decks });
-          return;
-        }
-        case 'anki-get-decks': {
-          const decks = await requestAnki({ action: 'deckNames', version: 6 });
-          sendResponse({ ok: true, data: decks });
-          return;
-        }
-        case 'anki-create-deck': {
-          const result = await requestAnki({
-            action: 'createDeck',
-            version: 6,
-            params: { deck: message.deckName }
-          });
-          sendResponse({ ok: true, data: result });
-          return;
-        }
-        case 'anki-add-note': {
-          const captureData = await getCaptureData();
-          await requestAnki({
-            action: 'addNote',
-            version: 6,
-            params: { note: message.note }
-          });
+  if (message.type === 'anki-ping' || message.type === 'anki-get-decks') {
+    requestAnki({ action: 'deckNames', version: 6 })
+      .then(decks => sendResponse({ ok: true, data: decks }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
 
-          if (captureData) {
-            const datasetEntry = {
-              input: captureData,
-              output: {
-                deckName: message.note.deckName,
-                modelName: message.note.modelName,
-                fields: message.note.fields,
-                tags: message.note.tags || []
-              },
-              addedAt: new Date().toISOString()
-            };
-            await sendDatasetEntryToLocalFile(datasetEntry);
-          }
+  if (message.type === 'anki-create-deck') {
+    requestAnki({ action: 'createDeck', version: 6, params: { deck: message.deckName } })
+      .then(res => sendResponse({ ok: true, data: res }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
 
-          sendResponse({ ok: true, data: null });
-          return;
-        }
-        case 'capture-start': {
-          if (message.tabId === undefined) {
-            throw new Error('No active tab was provided.');
-          }
-          await ensureContentReady(message.tabId);
-          await chrome.tabs.sendMessage(message.tabId, { type: 'capture-start', mode: 'toolbar' });
-          sendResponse({ ok: true, data: null });
-          return;
-        }
-        case 'capture-text': {
-          const captureData = {
-            selectedText: message.selectedText,
-            pageTitle: message.pageTitle,
-            pageUrl: message.pageUrl,
-            timestamp: message.timestamp,
-            type: 'text'
-          };
-          await saveCaptureData(captureData);
-          await openEditorWindow();
-          sendResponse({ ok: true, data: null });
-          return;
-        }
-        case 'capture-image': {
-          const captureData = {
-            imageData: message.imageData,
-            imageAlt: message.imageAlt,
-            pageTitle: message.pageTitle,
-            pageUrl: message.pageUrl,
-            timestamp: message.timestamp,
-            type: 'image'
-          };
-          await saveCaptureData(captureData);
-          await openEditorWindow();
-          sendResponse({ ok: true, data: null });
-          return;
-        }
-        case 'capture-area-selection': {
-          const tabId = sender.tab?.id;
-          if (!tabId) {
-            throw new Error('Active tab not found.');
-          }
-          const dataUrl = await chrome.tabs.captureVisibleTab(tabId, { format: 'png' });
-          const imageData = await cropImageRegion(dataUrl, message.selection);
-          const captureData = {
-            imageData,
-            x: message.selection.x,
-            y: message.selection.y,
-            width: message.selection.width,
-            height: message.selection.height,
-            pageTitle: message.pageTitle,
-            pageUrl: message.pageUrl,
-            timestamp: message.timestamp,
-            type: 'area'
-          };
-          await saveCaptureData(captureData);
-          await openEditorWindow();
-          sendResponse({ ok: true, data: captureData });
-          return;
-        }
-        case 'get-capture-data': {
-          const data = await getCaptureData();
-          sendResponse({ ok: true, data });
-          return;
-        }
-        case 'clear-capture-data': {
-          await clearCaptureData();
-          sendResponse({ ok: true, data: null });
-          return;
-        }
-        default:
-          throw new Error(`Unsupported message type: ${message.type}`);
+  if (message.type === 'anki-add-note') {
+    (async () => {
+      const captureData = await getCaptureData();
+      await requestAnki({ action: 'addNote', version: 6, params: { note: message.note } });
+      if (captureData) {
+        await sendDatasetEntryToLocalFile({
+          input: captureData,
+          output: {
+            deckName: message.note.deckName,
+            modelName: message.note.modelName,
+            fields: message.note.fields,
+            tags: message.note.tags || []
+          },
+          addedAt: new Date().toISOString()
+        });
       }
-    } catch (error) {
-      sendResponse({ ok: false, error: error.message });
-    }
-  };
+      sendResponse({ ok: true, data: null });
+    })().catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
 
-  handleMessage();
-  return true;
+  if (message.type === 'capture-start') {
+    if (message.tabId === undefined) {
+      sendResponse({ ok: false, error: 'No active tab provided.' });
+      return;
+    }
+    ensureContentReady(message.tabId)
+      .then(() => chrome.tabs.sendMessage(message.tabId, { type: 'capture-start', mode: 'toolbar' }))
+      .then(() => sendResponse({ ok: true, data: null }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
+  if (message.type === 'capture-text') {
+    const captureData = {
+      selectedText: message.selectedText,
+      pageTitle: message.pageTitle,
+      pageUrl: message.pageUrl,
+      timestamp: message.timestamp,
+      type: 'text'
+    };
+    saveCaptureData(captureData)
+      .then(openEditorWindow)
+      .then(() => sendResponse({ ok: true, data: null }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
+  
+
+  if (message.type === 'capture-area-selection') {
+    const windowId = sender.tab?.windowId;
+    if (!windowId) {
+      sendResponse({ ok: false, error: 'Active window structure mapping missing.' });
+      return;
+    }
+    
+    // Executes image assembly synchronously down the data path stream
+    chrome.tabs.captureVisibleTab(windowId, { format: 'png' })
+      .then(dataUrl => cropImageRegion(dataUrl, message.selection))
+      .then(async (imageData) => {
+        const captureData = {
+          imageData,
+          x: message.selection.x,
+          y: message.selection.y,
+          width: message.selection.width,
+          height: message.selection.height,
+          pageTitle: message.pageTitle,
+          pageUrl: message.pageUrl,
+          timestamp: message.timestamp,
+          type: 'area'
+        };
+        await saveCaptureData(captureData);
+        await openEditorWindow();
+        sendResponse({ ok: true, data: captureData });
+      })
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
+  if (message.type === 'get-capture-data') {
+    getCaptureData()
+      .then(data => sendResponse({ ok: true, data }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
+  if (message.type === 'clear-capture-data') {
+    clearCaptureData()
+      .then(() => sendResponse({ ok: true, data: null }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
 });

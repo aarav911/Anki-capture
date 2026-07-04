@@ -1,187 +1,151 @@
 (function () {
-  if (window.__ankiCaptureContentLoaded) {
-    return;
+  if (window.__ankiCaptureOverlayLoaded) return;
+  window.__ankiCaptureOverlayLoaded = true;
+
+  let overlay = null;
+  let selectionBox = null;
+  let startX = 0;
+  let startY = 0;
+  let currentX = 0;
+  let currentY = 0;
+  let isDrawing = false;
+  let listenersAttached = false;
+
+  function createOverlay() {
+    if (overlay) return overlay;
+    overlay = document.createElement('div');
+    overlay.id = 'anki-capture-overlay';
+    overlay.className = 'anki-capture-overlay';
+
+    selectionBox = document.createElement('div');
+    selectionBox.id = 'anki-capture-selection';
+    selectionBox.className = 'anki-capture-selection';
+
+    overlay.appendChild(selectionBox);
+    document.body.appendChild(overlay);
+    return overlay;
   }
-  window.__ankiCaptureContentLoaded = true;
 
-  const TOOLBAR_ID = 'anki-capture-toolbar';
-  let toolbarVisible = false;
-  let activeMode = null;
-  let selectionListenerAttached = false;
-  let imageListenerAttached = false;
-
-  function ensureToolbar() {
-    let toolbar = document.getElementById(TOOLBAR_ID);
-    if (toolbar) {
-      return toolbar;
+  function removeOverlay() {
+    if (overlay) {
+      overlay.remove();
+      overlay = null;
+      selectionBox = null;
     }
+    removeSelectionListeners();
+  }
+
+  function updateSelectionBox() {
+    if (!selectionBox) return;
+    const width = Math.abs(currentX - startX);
+    const height = Math.abs(currentY - startY);
+    const left = Math.min(startX, currentX);
+    const top = Math.min(startY, currentY);
+
+    selectionBox.style.left = `${left}px`;
+    selectionBox.style.top = `${top}px`;
+    selectionBox.style.width = `${width}px`;
+    selectionBox.style.height = `${height}px`;
+    selectionBox.style.display = width > 0 && height > 0 ? 'block' : 'none';
+  }
+
+  function attachSelectionListeners() {
+    if (listenersAttached) return;
+    window.addEventListener('mousemove', moveSelection);
+    window.addEventListener('mouseup', finishSelection);
+    listenersAttached = true;
+  }
+
+  function removeSelectionListeners() {
+    window.removeEventListener('mousemove', moveSelection);
+    window.removeEventListener('mouseup', finishSelection);
+    listenersAttached = false;
+  }
+
+  function startSelection(event) {
+    event.preventDefault();
+    isDrawing = true;
+    startX = event.clientX;
+    startY = event.clientY;
+    currentX = startX;
+    currentY = startY;
+    createOverlay();
+    overlay.style.display = 'block';
+    updateSelectionBox();
+  }
+
+  function moveSelection(event) {
+    if (!isDrawing) return;
+    currentX = event.clientX;
+    currentY = event.clientY;
+    updateSelectionBox();
+  }
+
+  async function finishSelection(event) {
+    if (!isDrawing) return;
+    isDrawing = false;
+    currentX = event.clientX;
+    currentY = event.clientY;
+    updateSelectionBox();
+
+    const width = Math.abs(currentX - startX);
+    const height = Math.abs(currentY - startY);
+
+    if (width < 5 || height < 5) {
+      removeOverlay();
+      return;
+    }
+
+    const x = Math.min(startX, currentX);
+    const y = Math.min(startY, currentY);
     
-    toolbar = document.createElement('div');
-    toolbar.id = TOOLBAR_ID;
-    toolbar.className = 'anki-capture-toolbar';
-    toolbar.innerHTML = `
-      <div class="anki-capture-toolbar__title">Capture Mode Active</div>
-      <div class="anki-capture-toolbar__actions">
-        <button type="button" class="anki-capture-toolbar__button" data-mode="text">Text Selection</button>
-        <button type="button" class="anki-capture-toolbar__button" data-mode="image">Image Selection</button>
-        <button type="button" class="anki-capture-toolbar__button" data-mode="area">Area Selection</button>
-        <button type="button" class="anki-capture-toolbar__button" data-mode="cancel">Cancel</button>
-      </div>
-    `;
+    const dpr = window.devicePixelRatio || 1;
+    const selection = {
+      x: x * dpr,
+      y: y * dpr,
+      width: width * dpr,
+      height: height * dpr
+    };
 
-    toolbar.addEventListener('click', (event) => {
-      const button = event.target.closest('button[data-mode]');
-      if (!button) {
-        return;
-      }
-      setMode(button.getAttribute('data-mode'));
-    });
+    // Crucial: Hide overlay DOM structure cleanly BEFORE the screenshot triggers
+    removeOverlay();
 
-    document.body.appendChild(toolbar);
-    return toolbar;
-  }
-
-  function showToolbar() {
-    const toolbar = ensureToolbar();
-    toolbar.style.display = 'block';
-    toolbarVisible = true;
-  }
-
-  function hideToolbar() {
-    const toolbar = document.getElementById(TOOLBAR_ID);
-    if (toolbar) {
-      toolbar.style.display = 'none';
-    }
-    toolbarVisible = false;
-    activeMode = null;
-  }
-
-  async function captureTextSelection() {
-    const selection = window.getSelection();
-    const selectedText = selection ? selection.toString().trim() : '';
-
-    if (!selectedText) {
-      return;
-    }
-
-    await chrome.runtime.sendMessage({
-      type: 'capture-text',
-      selectedText,
-      pageTitle: document.title,
-      pageUrl: window.location.href,
-      timestamp: new Date().toISOString()
-    });
-
-    hideToolbar();
-  }
-
-  async function fetchImageDataUrl(imageUrl) {
-    if (imageUrl.startsWith('data:')) {
-      return imageUrl;
-    }
-
-    try {
-      const response = await fetch(imageUrl);
-      const blob = await response.blob();
-      return await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
+    // A brief execution pause guarantees browser layout rendering completes before capturing
+    setTimeout(async () => {
+      const capturedData = await chrome.runtime.sendMessage({
+        type: 'capture-area-selection',
+        selection,
+        pageTitle: document.title,
+        pageUrl: window.location.href,
+        timestamp: new Date().toISOString()
       });
-    } catch (error) {
-      return imageUrl;
-    }
-  }
 
-  async function captureImageSelection(imageElement) {
-    if (!imageElement) {
-      return;
-    }
-
-    const imageUrl = imageElement.currentSrc || imageElement.src;
-    const imageAlt = imageElement.alt || '';
-    const imageData = await fetchImageDataUrl(imageUrl);
-
-    await chrome.runtime.sendMessage({
-      type: 'capture-image',
-      imageData,
-      imageAlt,
-      pageTitle: document.title,
-      pageUrl: window.location.href,
-      timestamp: new Date().toISOString()
-    });
-
-    hideToolbar();
-  }
-
-  function attachSelectionListener() {
-    if (selectionListenerAttached) {
-      return;
-    }
-
-    document.addEventListener('mouseup', () => {
-      if (!toolbarVisible || activeMode !== 'text') {
-        return;
+      if (capturedData?.ok) {
+        console.log("Response complete:", capturedData.data);
+      } else {
+        console.error("Capture failed:", capturedData?.error);
       }
-      captureTextSelection();
-    });
-
-    selectionListenerAttached = true;
+    }, 50);
   }
 
-  function attachImageListener() {
-    if (imageListenerAttached) {
-      return;
-    }
-
-    document.addEventListener('click', (event) => {
-      if (!toolbarVisible || activeMode !== 'image') {
-        return;
-      }
-
-      const imageElement = event.target.closest('img');
-      if (!imageElement) {
-        return;
-      }
-
-      event.preventDefault();
-      event.stopPropagation();
-      captureImageSelection(imageElement);
-    }, true);
-
-    imageListenerAttached = true;
+  function enableAreaSelection() {
+    const overlayElement = createOverlay();
+    overlayElement.style.display = 'block';
+    attachSelectionListeners();
+    overlayElement.addEventListener('mousedown', startSelection);
   }
 
-  function setMode(mode) {
-    activeMode = mode;
+  function disableAreaSelection() {
+    removeOverlay();
+    isDrawing = false;
+  }
 
-    if (mode === 'text') {
-      attachSelectionListener();
-      return;
-    }
-
-    if (mode === 'image') {
-      attachImageListener();
-      return;
-    }
-
+  window.addEventListener('anki-capture-mode', (event) => {
+    const mode = event.detail?.mode;
     if (mode === 'area') {
-      window.dispatchEvent(new CustomEvent('anki-capture-mode', { detail: { mode: 'area' } }));
-      return;
-    }
-
-    if (mode === 'cancel') {
-      window.dispatchEvent(new CustomEvent('anki-capture-mode', { detail: { mode: 'cancel' } }));
-      hideToolbar();
-    }
-  }
-
-  chrome.runtime.onMessage.addListener((message) => {
-    if (message.type === 'capture-start') {
-      showToolbar();
-      attachSelectionListener();
-      attachImageListener();
+      enableAreaSelection();
+    } else if (mode === 'cancel') {
+      disableAreaSelection();
     }
   });
 })();

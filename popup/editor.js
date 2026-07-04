@@ -75,6 +75,7 @@ async function loadDecks() {
   }
 }
 
+// Change this block in popup/editor.js:
 async function loadCaptureData() {
   try {
     captureData = await sendToBackground({ type: 'get-capture-data' });
@@ -83,21 +84,24 @@ async function loadCaptureData() {
       return;
     }
 
-    if (captureData.selectedText) {
+    // Isolate text selection strictly away from image rendering paths
+    if (captureData.type === 'text' || (captureData.selectedText && !captureData.imageData)) {
       frontField.value = ``;
-      backField.value = captureData.selectedText + `\n\n################\n`+`Source: ${captureData.pageTitle}\n${captureData.pageUrl}`;
+      backField.value = captureData.selectedText + `\n\n################\n` + `Source: ${captureData.pageTitle}\n${captureData.pageUrl}`;
+      imagePreviewContainer.hidden = true; // Explicitly ensure image preview hides on text copy
       statusMessage.textContent = 'Captured text ready for a new note.';
     }
-
-    if (captureData.imageData) {
+    else if (captureData.type === 'area' || captureData.type === 'image' || captureData.imageData) {
       imagePreview.src = captureData.imageData;
       imagePreviewContainer.hidden = false;
-      statusMessage.textContent = 'Captured image ready for a new note.';
+      statusMessage.textContent = `Captured ${captureData.type || 'image'} ready for a new note.`;
+      
       if (!frontField.value) {
         frontField.value = captureData.pageTitle || 'Image capture';
       }
+      
       if (!backField.value) {
-        backField.value = `Source: ${captureData.pageUrl}`;
+        backField.value = `<div><img src="${captureData.imageData}" alt="Snipped capture" style="max-width:100%;"></div>\n\nSource: ${captureData.pageUrl}`;
       }
     }
   } catch (error) {
@@ -107,48 +111,34 @@ async function loadCaptureData() {
 
 async function addNote() {
   clearError();
-
   const deckName = deckSelect.value;
   const modelName = noteTypeSelect.value;
   const tags = tagsInput.value.trim().split(/\s+/).filter(Boolean);
   const front = frontField.value.trim();
   let back = backField.value.trim();
 
-  if (!front) {
-    showError('The front field cannot be empty.');
-    return;
-  }
-  if (!back) {
-    showError('The back field cannot be empty.');
-    return;
-  }
-
-  if (captureData?.imageData) {
-    back += `\n<div><img src="${captureData.imageData}" alt="Captured image" style="max-width:100%;"></div>`;
-  }
+  if (!front) { showError('The front field cannot be empty.'); return; }
+  if (!back) { showError('The back field cannot be empty.'); return; }
 
   try {
-    addNoteButton.innerHTML = "Adding.."
+    addNoteButton.innerHTML = "Adding..";
     addNoteButton.disabled = true;
+    
     await sendToBackground({
       type: 'anki-add-note',
       note: {
         deckName,
         modelName,
-        fields: {
-          Front: front,
-          Back: back
-        },
+        fields: { Front: front, Back: back },
         tags
       }
     });
-
-   
 
     statusMessage.textContent = 'Note added successfully.';
     setTimeout(() => window.close(), 500);
   } catch (error) {
     showError(error.message || 'Unable to add note.');
+    addNoteButton.innerHTML = "Add Note";
     addNoteButton.disabled = false;
   }
 }
