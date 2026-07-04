@@ -67,8 +67,27 @@ async function checkConnection() {
   clearError();
   setConnectedState(false, 'Checking connection…');
   try {
+    // 1. Fetch decks from Anki
     const decks = await sendToBackground({ type: 'anki-ping' });
+    
+    // 2. Populate the dropdown
     populateDecks(decks);
+    
+    // 3. Restore previously selected deck
+    const { currentDeck } = await chrome.storage.session.get(["currentDeck"]);
+    
+    if (currentDeck) {
+      // Verify the stored deck still exists in the list
+      const optionExists = Array.from(deckSelect.options).some(opt => opt.value === currentDeck);
+      
+      if (optionExists) {
+        deckSelect.value = currentDeck;
+        console.log('Restored deck selection:', currentDeck);
+      } else {
+        console.log('Stored deck not found in current list:', currentDeck);
+      }
+    }
+
     setConnectedState(true, 'Connected to Anki.');
   } catch (error) {
     showError('AnkiConnect not detected. Please open Anki and ensure AnkiConnect is installed.');
@@ -81,6 +100,13 @@ async function refreshDecks() {
     const decks = await sendToBackground({ type: 'anki-get-decks' });
     populateDecks(decks);
     setConnectedState(true, 'Decks refreshed.');
+    
+    // Optional: Re-restore selection after refresh if needed
+    const { currentDeck } = await chrome.storage.session.get(["currentDeck"]);
+    if (currentDeck) {
+      const optionExists = Array.from(deckSelect.options).some(opt => opt.value === currentDeck);
+      if (optionExists) deckSelect.value = currentDeck;
+    }
   } catch (error) {
     showError('Unable to refresh decks.');
     setConnectedState(false, error.message);
@@ -99,7 +125,10 @@ createDeckButton.addEventListener('click', async () => {
     await sendToBackground({ type: 'anki-create-deck', deckName });
     newDeckName.value = '';
     await refreshDecks();
+    // Select the newly created deck
     deckSelect.value = deckName;
+    // Save it immediately
+    await chrome.storage.session.set({ currentDeck: deckName });
   } catch (error) {
     showError(error.message || 'Unable to create deck.');
   }
@@ -126,4 +155,13 @@ addNoteButton.addEventListener('click', async () => {
 
 document.addEventListener('DOMContentLoaded', () => {
   checkConnection();
-});
+
+  deckSelect.addEventListener('change', async function(event) {
+    const selectedValue = event.target.value;
+    console.log('Deck changed to:', selectedValue);
+    
+    await chrome.storage.session.set({
+      currentDeck: selectedValue, 
+    });
+  });   
+});   
