@@ -1,0 +1,174 @@
+const statusPill = document.getElementById('status-pill');
+const statusMessage = document.getElementById('capture-summary');
+const errorBox = document.getElementById('error-box');
+const deckSelect = document.getElementById('deck-select');
+const noteTypeSelect = document.getElementById('note-type-select');
+const tagsInput = document.getElementById('tags-input');
+const frontField = document.getElementById('front-field');
+const backField = document.getElementById('back-field');
+const imagePreviewContainer = document.getElementById('image-preview-container');
+const imagePreview = document.getElementById('image-preview');
+const addNoteButton = document.getElementById('add-note-button');
+const clearButton = document.getElementById('clear-button');
+const closeButton = document.getElementById('close-button');
+let captureData = null;
+
+function setConnectedState(connected, message) {
+  statusPill.className = 'status-pill';
+  if (connected) {
+    statusPill.textContent = 'Connected to Anki';
+    statusPill.classList.add('status-connected');
+    statusMessage.textContent = message || 'Ready to create a card.';
+    deckSelect.disabled = false;
+    addNoteButton.disabled = false;
+    clearButton.disabled = false;
+  } else {
+    statusPill.textContent = 'Disconnected';
+    statusPill.classList.add('status-error');
+    statusMessage.textContent = message || 'AnkiConnect not detected.';
+    deckSelect.disabled = true;
+    addNoteButton.disabled = true;
+    clearButton.disabled = false;
+  }
+}
+
+function showError(message) {
+  errorBox.hidden = false;
+  errorBox.textContent = message;
+}
+
+function clearError() {
+  errorBox.hidden = true;
+  errorBox.textContent = '';
+}
+
+async function sendToBackground(message) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(message, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      if (!response || response.ok === false) {
+        reject(new Error(response?.error || 'Background command failed.'));
+        return;
+      }
+      resolve(response.data);
+    });
+  });
+}
+
+async function loadDecks() {
+  try {
+    const decks = await sendToBackground({ type: 'anki-get-decks' });
+    deckSelect.innerHTML = '';
+    decks.forEach((deck) => {
+      const option = document.createElement('option');
+      option.value = deck;
+      option.textContent = deck;
+      deckSelect.appendChild(option);
+    });
+    setConnectedState(true, 'Connected to Anki.');
+  } catch (error) {
+    showError('AnkiConnect not detected. Please open Anki and ensure AnkiConnect is installed.');
+    setConnectedState(false, error.message);
+  }
+}
+
+async function loadCaptureData() {
+  try {
+    captureData = await sendToBackground({ type: 'get-capture-data' });
+    if (!captureData) {
+      statusMessage.textContent = 'Open the extension popup and capture text or an image from a page.';
+      return;
+    }
+
+    if (captureData.selectedText) {
+      frontField.value = ``;
+      backField.value = captureData.selectedText + `\n\n################\n`+`Source: ${captureData.pageTitle}\n${captureData.pageUrl}`;
+      statusMessage.textContent = 'Captured text ready for a new note.';
+    }
+
+    if (captureData.imageData) {
+      imagePreview.src = captureData.imageData;
+      imagePreviewContainer.hidden = false;
+      statusMessage.textContent = 'Captured image ready for a new note.';
+      if (!frontField.value) {
+        frontField.value = captureData.pageTitle || 'Image capture';
+      }
+      if (!backField.value) {
+        backField.value = `Source: ${captureData.pageUrl}`;
+      }
+    }
+  } catch (error) {
+    showError('Unable to load captured content.');
+  }
+}
+
+async function addNote() {
+  clearError();
+
+  const deckName = deckSelect.value;
+  const modelName = noteTypeSelect.value;
+  const tags = tagsInput.value.trim().split(/\s+/).filter(Boolean);
+  const front = frontField.value.trim();
+  let back = backField.value.trim();
+
+  if (!front) {
+    showError('The front field cannot be empty.');
+    return;
+  }
+  if (!back) {
+    showError('The back field cannot be empty.');
+    return;
+  }
+
+  if (captureData?.imageData) {
+    back += `\n<div><img src="${captureData.imageData}" alt="Captured image" style="max-width:100%;"></div>`;
+  }
+
+  try {
+    addNoteButton.innerHTML = "Adding.."
+    addNoteButton.disabled = true;
+    await sendToBackground({
+      type: 'anki-add-note',
+      note: {
+        deckName,
+        modelName,
+        fields: {
+          Front: front,
+          Back: back
+        },
+        tags
+      }
+    });
+
+   
+
+    statusMessage.textContent = 'Note added successfully.';
+    setTimeout(() => window.close(), 500);
+  } catch (error) {
+    showError(error.message || 'Unable to add note.');
+    addNoteButton.disabled = false;
+  }
+}
+
+async function clearCapture() {
+  captureData = null;
+  frontField.value = '';
+  backField.value = '';
+  tagsInput.value = '';
+  imagePreviewContainer.hidden = true;
+  imagePreview.src = '';
+  statusMessage.textContent = 'Capture cleared. You can create a note manually.';
+  await sendToBackground({ type: 'clear-capture-data' });
+}
+
+closeButton.addEventListener('click', () => window.close());
+addNoteButton.addEventListener('click', addNote);
+clearButton.addEventListener('click', clearCapture);
+
+document.addEventListener('DOMContentLoaded', async () => {
+  await loadDecks();
+  await loadCaptureData();
+});

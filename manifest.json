@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Anki Capture",
+  "version": "1.0.0",
+  "description": "Capture webpages and screenshots for a future research-to-Anki workflow.",
+  "permissions": ["activeTab", "scripting", "tabs", "storage", "windows"],
+  "host_permissions": [
+    "http://127.0.0.1:8765/*",
+    "http://127.0.0.1:9876/*",
+    "http://*/*",
+    "https://*/*",
+    "file:///*",
+    "chrome-extension://*/*"
+  ],
+  "background": {
+    "service_worker": "background/service_worker.js"
+  },
+  "action": {
+    "default_title": "Anki Capture",
+    "default_popup": "popup/popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*",
+        "file:///*"
+      ],
+      "js": ["content/content.js", "content/overlay.js"],
+      "css": ["content/overlay.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["content/overlay.css"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Anki Capture Editor</title>
+    <link rel="stylesheet" href="popup.css" />
+    <link rel="stylesheet" href="editor.css" />
+  </head>
+  <body>
+    <main class="popup-shell">
+      <section class="card">
+        <div class="header-row">
+          <div>
+            <h1 class="editor-title">Create Anki Card</h1>
+            <p id="capture-summary" class="status-message">Loading captured content…</p>
+          </div>
+          <button id="close-button" class="secondary-button" type="button">Close</button>
+        </div>
+
+        <div id="status-pill" class="status-pill status-checking">Checking AnkiConnect…</div>
+        <div id="error-box" class="error-box" hidden></div>
+
+        <label class="field-label" for="deck-select">Deck</label>
+        <select id="deck-select" class="control" disabled></select>
+
+        <label class="field-label" for="note-type-select">Note Type</label>
+        <select id="note-type-select" class="control">
+          <option value="Basic">Basic</option>
+          <option value="Basic (and reverse)">Basic (and reverse)</option>
+        </select>
+
+        <label class="field-label" for="tags-input">Tags</label>
+        <input id="tags-input" class="control" type="text" placeholder="tag1 tag2" />
+
+        <label class="field-label" for="front-field">Front</label>
+        <textarea id="front-field" class="control" rows="5" placeholder="Front text or question"></textarea>
+
+        <label class="field-label" for="back-field">Back</label>
+        <textarea id="back-field" class="control" rows="8" placeholder="Back text or answer"></textarea>
+
+        <div id="image-preview-container" class="image-preview-container" hidden>
+          <div class="field-label">Captured Image</div>
+          <img id="image-preview" class="image-preview" alt="Captured content preview" />
+        </div>
+
+        <div class="button-row">
+          <button id="add-note-button" class="primary-button" type="button">Add Note</button>
+          <button id="clear-button" class="secondary-button" type="button">Clear</button>
+        </div>
+      </section>
+    </main>
+    <script src="editor.js"></script>
+  </body>
+</html>

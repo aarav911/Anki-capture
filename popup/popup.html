@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Anki Capture</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="popup-shell">
+      <section class="card">
+        <div id="status-pill" class="status-pill status-checking">Checking AnkiConnect…</div>
+        <p id="status-message" class="status-message">Connecting to local AnkiConnect.</p>
+
+        <div id="error-box" class="error-box" hidden></div>
+
+        <label class="field-label" for="deck-select">Deck</label>
+        <select id="deck-select" class="control" disabled></select>
+
+        <label class="field-label" for="new-deck-name">Create Deck</label>
+        <div class="create-deck-row">
+          <input id="new-deck-name" class="control" type="text" placeholder="New deck name" disabled />
+          <button id="create-deck-button" class="secondary-button" type="button" disabled>Create</button>
+        </div>
+
+        <hr class="divider" />
+
+        <button id="add-note-button" class="primary-button" type="button">Add Note</button>
+      </section>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

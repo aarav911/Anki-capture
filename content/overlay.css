@@ -1,0 +1,50 @@
+.anki-capture-toolbar {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 2147483647;
+  display: none;
+  background: #111827;
+  color: #f9fafb;
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.anki-capture-toolbar__title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.anki-capture-toolbar__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.anki-capture-toolbar__button {
+  border: none;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #2563eb;
+  color: white;
+  cursor: pointer;
+}
+
+.anki-capture-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  display: none;
+  cursor: crosshair;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.anki-capture-selection {
+  position: fixed;
+  display: none;
+  border: 2px solid #2563eb;
+  background: rgba(37, 99, 235, 0.15);
+  pointer-events: none;
+}
