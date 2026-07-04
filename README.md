@@ -81,3 +81,4 @@ The extension coordinates internal workflows using `chrome.runtime.sendMessage` 
 ![alt text](image-1.png)
 ![alt text](image-2.png)
 
+Automatically ingested into ANKI ![alt text](image-3.png)
