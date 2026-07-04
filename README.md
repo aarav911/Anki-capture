@@ -75,4 +75,9 @@ The extension coordinates internal workflows using `chrome.runtime.sendMessage` 
 | `anki-get-decks` | Editor $\rightarrow$ Background | Requests active deck collection configurations out of AnkiConnect |
 | `anki-add-note` | Editor $\rightarrow$ Background | Compiles final payload fields to execute `addNote` in Anki |
 
+---
+## Images
+![Main popup](image.png)
+![alt text](image-1.png)
+![alt text](image-2.png)
 
