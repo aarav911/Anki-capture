@@ -15,7 +15,14 @@
 .anki-capture-toolbar__title {
   font-size: 13px;
   font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.anki-capture-toolbar__status {
+  color: #cbd5e1;
+  font-size: 12px;
   margin-bottom: 8px;
+  max-width: 240px;
 }
 
 .anki-capture-toolbar__actions {

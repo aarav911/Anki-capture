@@ -122,8 +122,10 @@
 
       if (capturedData?.ok) {
         console.log("Response complete:", capturedData.data);
+        window.dispatchEvent(new CustomEvent('anki-capture-complete', { detail: { mode: 'area' } }));
       } else {
         console.error("Capture failed:", capturedData?.error);
+        window.dispatchEvent(new CustomEvent('anki-capture-error', { detail: { error: capturedData?.error } }));
       }
     }, 50);
   }

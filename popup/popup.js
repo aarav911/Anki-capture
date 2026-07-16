@@ -23,7 +23,7 @@ function setConnectedState(connected, message) {
     deckSelect.disabled = true;
     newDeckName.disabled = true;
     createDeckButton.disabled = true;
-    addNoteButton.disabled = true;
+    addNoteButton.disabled = false;
   }
 }
 

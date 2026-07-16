@@ -2,6 +2,10 @@ const ANKI_CONNECT_URL = 'http://127.0.0.1:8765';
 const CAPTURE_STORAGE_KEY = 'ankiCaptureData';
 const DATA_SERVER_URL = 'http://127.0.0.1:9876/append';
 
+let editorOpen = false;
+let editorWindowId = null;
+let activeCaptureTabId = null;
+
 async function requestAnki(payload) {
   const response = await fetch(ANKI_CONNECT_URL, {
     method: 'POST',
@@ -14,17 +18,33 @@ async function requestAnki(payload) {
   return data.result;
 }
 
-async function saveCaptureData(data) {
-  await chrome.storage.local.set({ [CAPTURE_STORAGE_KEY]: data });
+async function appendCaptureData(newEntry) {
+  const currentData = await getCaptureData();
+  currentData.push(newEntry);
+  await chrome.storage.local.set({ [CAPTURE_STORAGE_KEY]: currentData });
+  return currentData;
 }
 
-async function clearCaptureData() {
-  await chrome.storage.local.remove(CAPTURE_STORAGE_KEY);
+function normalizeCaptureData(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.filter(Boolean);
+  if (typeof value === 'object') return [value];
+  return [];
 }
 
 async function getCaptureData() {
   const result = await chrome.storage.local.get(CAPTURE_STORAGE_KEY);
-  return result[CAPTURE_STORAGE_KEY] || null;
+  const normalizedData = normalizeCaptureData(result[CAPTURE_STORAGE_KEY]);
+
+  if (result[CAPTURE_STORAGE_KEY] && !Array.isArray(result[CAPTURE_STORAGE_KEY])) {
+    await chrome.storage.local.set({ [CAPTURE_STORAGE_KEY]: normalizedData });
+  }
+
+  return normalizedData;
+}
+
+async function clearCaptureData() {
+  await chrome.storage.local.remove(CAPTURE_STORAGE_KEY);
 }
 
 async function sendDatasetEntryToLocalFile(entry) {
@@ -40,13 +60,24 @@ async function sendDatasetEntryToLocalFile(entry) {
 }
 
 async function openEditorWindow() {
-  await chrome.windows.create({
+  if (editorOpen && editorWindowId !== null) {
+    try {
+      await chrome.windows.update(editorWindowId, { focused: true });
+      return;
+    } catch (error) {
+      closeEditorState();
+    }
+  }
+
+  editorOpen = true;
+  const editorWindow = await chrome.windows.create({
     url: chrome.runtime.getURL('popup/editor.html'),
     type: 'popup',
     width: 640,
     height: 760,
     focused: true
   });
+  editorWindowId = editorWindow.id || null;
 }
 
 async function ensureContentReady(tabId) {
@@ -80,13 +111,121 @@ async function cropImageRegion(dataUrl, selection) {
 
   const croppedBlob = await canvas.convertToBlob({ type: 'image/png' });
   const arrayBuffer = await croppedBlob.arrayBuffer();
+  
   let binary = '';
   const bytes = new Uint8Array(arrayBuffer);
-  bytes.forEach(b => binary += String.fromCharCode(b));
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
   return `data:image/png;base64,${btoa(binary)}`;
 }
 
-// Fixed Router Framework: Natively wraps the runtime context to cleanly pass asynchronous messages
+async function startCapture(tabId) {
+  if (tabId === undefined) {
+    throw new Error('No active tab provided.');
+  }
+
+  activeCaptureTabId = tabId;
+  await ensureContentReady(tabId);
+  await chrome.tabs.sendMessage(tabId, { type: 'capture-start', mode: 'toolbar' });
+}
+
+async function startCaptureInActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) {
+    throw new Error('No active tab found.');
+  }
+
+  await startCapture(tab.id);
+}
+
+async function notifyEditor(latestCapture, captures) {
+  await openEditorWindow();
+
+  try {
+    await chrome.runtime.sendMessage({
+      type: 'capture-data-updated',
+      latestCapture,
+      captures
+    });
+  } catch (error) {
+    console.warn('Editor update message was not received:', error.message);
+  }
+}
+
+function closeEditorState() {
+  editorOpen = false;
+  editorWindowId = null;
+}
+
+function makeMediaFilename(index) {
+  const randomPart = Math.random().toString(36).slice(2, 10);
+  return `anki-capture-${Date.now()}-${index}-${randomPart}.png`;
+}
+
+async function replaceDataImagesWithAnkiMedia(html) {
+  if (!html || !html.includes('data:image/')) {
+    return html;
+  }
+
+  let imageIndex = 0;
+  const imagePattern = /<img([^>]*?)src="data:image\/png;base64,([^"]+)"([^>]*)>/g;
+  const replacements = [];
+  let match;
+
+  while ((match = imagePattern.exec(html)) !== null) {
+    const filename = makeMediaFilename(imageIndex);
+    imageIndex += 1;
+    replacements.push({
+      original: match[0],
+      updated: `<img${match[1]}src="${filename}"${match[3]}>`,
+      filename,
+      data: match[2]
+    });
+  }
+
+  for (const replacement of replacements) {
+    await requestAnki({
+      action: 'storeMediaFile',
+      version: 6,
+      params: {
+        filename: replacement.filename,
+        data: replacement.data
+      }
+    });
+    html = html.replace(replacement.original, replacement.updated);
+  }
+
+  return html;
+}
+
+async function prepareNoteForAnki(note) {
+  const preparedNote = {
+    ...note,
+    fields: {
+      ...note.fields
+    }
+  };
+
+  preparedNote.fields.Back = await replaceDataImagesWithAnkiMedia(preparedNote.fields.Back);
+  preparedNote.fields.Front = await replaceDataImagesWithAnkiMedia(preparedNote.fields.Front);
+  return preparedNote;
+}
+
+chrome.commands.onCommand.addListener((command) => {
+  if (command !== 'start-capture') return;
+  startCaptureInActiveTab().catch((error) => {
+    console.error('Unable to start Anki Capture from shortcut:', error);
+  });
+});
+
+chrome.windows.onRemoved.addListener((windowId) => {
+  if (windowId === editorWindowId) {
+    closeEditorState();
+  }
+});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'anki-ping' || message.type === 'anki-get-decks') {
     requestAnki({ action: 'deckNames', version: 6 })
@@ -104,11 +243,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'anki-add-note') {
     (async () => {
-      const captureData = await getCaptureData();
-      await requestAnki({ action: 'addNote', version: 6, params: { note: message.note } });
-      if (captureData) {
+      const captureDataList = await getCaptureData();
+      const note = await prepareNoteForAnki(message.note);
+      await requestAnki({ action: 'addNote', version: 6, params: { note } });
+      
+      // Dataset payload handles the historical log of captured data context
+      if (captureDataList.length > 0) {
         await sendDatasetEntryToLocalFile({
-          input: captureData,
+          input: captureDataList, 
           output: {
             deckName: message.note.deckName,
             modelName: message.note.modelName,
@@ -124,12 +266,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'capture-start') {
-    if (message.tabId === undefined) {
-      sendResponse({ ok: false, error: 'No active tab provided.' });
-      return;
-    }
-    ensureContentReady(message.tabId)
-      .then(() => chrome.tabs.sendMessage(message.tabId, { type: 'capture-start', mode: 'toolbar' }))
+    startCapture(message.tabId)
+      .then(() => sendResponse({ ok: true, data: null }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
+  if (message.type === 'capture-more') {
+    const tabId = message.tabId || activeCaptureTabId;
+    startCapture(tabId)
       .then(() => sendResponse({ ok: true, data: null }))
       .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
@@ -143,14 +288,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       timestamp: message.timestamp,
       type: 'text'
     };
-    saveCaptureData(captureData)
-      .then(openEditorWindow)
-      .then(() => sendResponse({ ok: true, data: null }))
+    appendCaptureData(captureData)
+      .then(captures => notifyEditor(captureData, captures).then(() => captures))
+      .then(captures => sendResponse({ ok: true, data: captures }))
       .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
   }
-
-  
 
   if (message.type === 'capture-area-selection') {
     const windowId = sender.tab?.windowId;
@@ -159,11 +302,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
     
-    // Executes image assembly synchronously down the data path stream
     chrome.tabs.captureVisibleTab(windowId, { format: 'png' })
       .then(dataUrl => cropImageRegion(dataUrl, message.selection))
       .then(async (imageData) => {
-        const captureData = {
+        const newEntry = {
           imageData,
           x: message.selection.x,
           y: message.selection.y,
@@ -174,12 +316,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           timestamp: message.timestamp,
           type: 'area'
         };
-        await saveCaptureData(captureData);
-        await openEditorWindow();
-        sendResponse({ ok: true, data: captureData });
+
+        const fullDataset = await appendCaptureData(newEntry);
+        await notifyEditor(newEntry, fullDataset);
+        sendResponse({ ok: true, data: fullDataset });
       })
       .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
+  }
+
+  if (message.type === 'close-editor') {
+    closeEditorState();
+    sendResponse({ ok: true, data: null });
+    return;
   }
 
   if (message.type === 'get-capture-data') {
@@ -191,7 +340,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'clear-capture-data') {
     clearCaptureData()
-      .then(() => sendResponse({ ok: true, data: null }))
+      .then(() => sendResponse({ ok: true, data: [] }))
       .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
   }

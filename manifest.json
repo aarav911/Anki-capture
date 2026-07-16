@@ -15,6 +15,15 @@
   "background": {
     "service_worker": "background/service_worker.js"
   },
+  "commands": {
+    "start-capture": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "Start Anki Capture"
+    }
+  },
   "action": {
     "default_title": "Anki Capture",
     "default_popup": "popup/popup.html"

@@ -7,11 +7,12 @@ const tagsInput = document.getElementById('tags-input');
 const frontField = document.getElementById('front-field');
 const backField = document.getElementById('back-field');
 const imagePreviewContainer = document.getElementById('image-preview-container');
-const imagePreview = document.getElementById('image-preview');
+const captureMoreButton = document.getElementById('capture-more-button');
 const addNoteButton = document.getElementById('add-note-button');
 const clearButton = document.getElementById('clear-button');
 const closeButton = document.getElementById('close-button');
-let captureData = null;
+
+let captureDataList = [];
 
 function setConnectedState(connected, message) {
   statusPill.className = 'status-pill';
@@ -20,6 +21,7 @@ function setConnectedState(connected, message) {
     statusPill.classList.add('status-connected');
     statusMessage.textContent = message || 'Ready to create a card.';
     deckSelect.disabled = false;
+    captureMoreButton.disabled = false;
     addNoteButton.disabled = false;
     clearButton.disabled = false;
   } else {
@@ -27,6 +29,7 @@ function setConnectedState(connected, message) {
     statusPill.classList.add('status-error');
     statusMessage.textContent = message || 'AnkiConnect not detected.';
     deckSelect.disabled = true;
+    captureMoreButton.disabled = false;
     addNoteButton.disabled = true;
     clearButton.disabled = false;
   }
@@ -68,6 +71,12 @@ async function loadDecks() {
       option.textContent = deck;
       deckSelect.appendChild(option);
     });
+
+    const { currentDeck } = await chrome.storage.session.get(['currentDeck']);
+    if (currentDeck && Array.from(deckSelect.options).some(option => option.value === currentDeck)) {
+      deckSelect.value = currentDeck;
+    }
+
     setConnectedState(true, 'Connected to Anki.');
   } catch (error) {
     showError('AnkiConnect not detected. Please open Anki and ensure AnkiConnect is installed.');
@@ -75,35 +84,95 @@ async function loadDecks() {
   }
 }
 
-// Change this block in popup/editor.js:
+function buildCaptureId(capture) {
+  return [
+    capture.type || 'capture',
+    capture.timestamp || '',
+    capture.pageUrl || '',
+    capture.selectedText || '',
+    capture.imageData ? capture.imageData.slice(0, 64) : ''
+  ].join('|');
+}
+
+function clearRenderedCaptures() {
+  backField.value = '';
+  imagePreviewContainer.innerHTML = '';
+  imagePreviewContainer.hidden = true;
+}
+
+function processAndAppendCapture(capture) {
+  if (!capture) return;
+
+  if (!frontField.value && capture.pageTitle) {
+    frontField.value = capture.pageTitle;
+  }
+
+  if (capture.type === 'text') {
+    const standardTextFormat = [
+      capture.selectedText
+    ].filter(Boolean).join('\n\n') + '\n\n';
+    backField.value += standardTextFormat;
+    statusMessage.textContent = 'Appended text capture to note.';
+    return;
+  }
+
+  if (capture.type === 'area' || capture.type === 'image' || capture.imageData) {
+    const imageHtmlFormat = [
+      `<div><img src="${capture.imageData}" alt="Snipped capture" style="max-width:100%;"></div>`
+    ].filter(Boolean).join('\n\n') + '\n\n';
+    backField.value += imageHtmlFormat;
+    
+    const imgWrapper = document.createElement('div');
+    imgWrapper.style.margin = '5px 0';
+    imgWrapper.style.border = '1px solid #ccc';
+    imgWrapper.style.borderRadius = '8px';
+    imgWrapper.style.overflow = 'hidden';
+    
+    const newImg = document.createElement('img');
+    newImg.src = capture.imageData;
+    newImg.style.maxWidth = '100%';
+    newImg.style.display = 'block';
+    
+    imgWrapper.appendChild(newImg);
+    imagePreviewContainer.appendChild(imgWrapper);
+    imagePreviewContainer.hidden = false;
+
+    statusMessage.textContent = 'Appended area selection capture to note.';
+  }
+}
+
+function renderCaptureData(captures) {
+  captureDataList = Array.isArray(captures) ? captures.filter(Boolean) : (captures ? [captures] : []);
+  clearRenderedCaptures();
+
+  captureDataList.forEach(capture => {
+    processAndAppendCapture(capture);
+  });
+
+  if (captureDataList.length === 0) {
+    statusMessage.textContent = 'Capture text or an image from a page to start this card.';
+    return;
+  }
+
+  statusMessage.textContent = `Loaded ${captureDataList.length} capture${captureDataList.length === 1 ? '' : 's'} into this card.`;
+}
+
+function appendLiveCapture(capture) {
+  if (!capture) return;
+
+  const existingIds = new Set(captureDataList.map(buildCaptureId));
+  const captureId = buildCaptureId(capture);
+  if (existingIds.has(captureId)) return;
+
+  captureDataList.push(capture);
+  processAndAppendCapture(capture);
+  statusMessage.textContent = `Added capture ${captureDataList.length}.`;
+}
+
 async function loadCaptureData() {
   try {
-    captureData = await sendToBackground({ type: 'get-capture-data' });
-    if (!captureData) {
-      statusMessage.textContent = 'Open the extension popup and capture text or an image from a page.';
-      return;
-    }
-
-    // Isolate text selection strictly away from image rendering paths
-    if (captureData.type === 'text' || (captureData.selectedText && !captureData.imageData)) {
-      frontField.value = ``;
-      backField.value = captureData.selectedText + `\n\n################\n` + `Source: ${captureData.pageTitle}\n${captureData.pageUrl}`;
-      imagePreviewContainer.hidden = true; // Explicitly ensure image preview hides on text copy
-      statusMessage.textContent = 'Captured text ready for a new note.';
-    }
-    else if (captureData.type === 'area' || captureData.type === 'image' || captureData.imageData) {
-      imagePreview.src = captureData.imageData;
-      imagePreviewContainer.hidden = false;
-      statusMessage.textContent = `Captured ${captureData.type || 'image'} ready for a new note.`;
-      
-      if (!frontField.value) {
-        frontField.value = captureData.pageTitle || 'Image capture';
-      }
-      
-      if (!backField.value) {
-        backField.value = `<div><img src="${captureData.imageData}" alt="Snipped capture" style="max-width:100%;"></div>\n\nSource: ${captureData.pageUrl}`;
-      }
-    }
+    const captures = await sendToBackground({ type: 'get-capture-data' });
+    renderCaptureData(captures);
   } catch (error) {
     showError('Unable to load captured content.');
   }
@@ -115,7 +184,7 @@ async function addNote() {
   const modelName = noteTypeSelect.value;
   const tags = tagsInput.value.trim().split(/\s+/).filter(Boolean);
   const front = frontField.value.trim();
-  let back = backField.value.trim();
+  const back = backField.value.trim();
 
   if (!front) { showError('The front field cannot be empty.'); return; }
   if (!back) { showError('The back field cannot be empty.'); return; }
@@ -134,6 +203,7 @@ async function addNote() {
       }
     });
 
+    await sendToBackground({ type: 'clear-capture-data' });
     statusMessage.textContent = 'Note added successfully.';
     setTimeout(() => window.close(), 500);
   } catch (error) {
@@ -143,18 +213,53 @@ async function addNote() {
   }
 }
 
+async function captureMore() {
+  clearError();
+  try {
+    await sendToBackground({ type: 'capture-more' });
+    statusMessage.textContent = 'Capture toolbar reopened on the source page.';
+    window.blur();
+  } catch (error) {
+    showError(error.message || 'Unable to restart capture mode.');
+  }
+}
+
 async function clearCapture() {
-  captureData = null;
+  captureDataList = [];
   frontField.value = '';
   backField.value = '';
   tagsInput.value = '';
   imagePreviewContainer.hidden = true;
-  imagePreview.src = '';
+  imagePreviewContainer.innerHTML = '';
   statusMessage.textContent = 'Capture cleared. You can create a note manually.';
   await sendToBackground({ type: 'clear-capture-data' });
 }
 
-closeButton.addEventListener('click', () => window.close());
+chrome.runtime.onMessage.addListener((message) => {
+  if (message.type === 'capture-data-updated') {
+    if (message.latestCapture) {
+      appendLiveCapture(message.latestCapture);
+    } else if (Array.isArray(message.captures)) {
+      renderCaptureData(message.captures);
+    }
+    window.focus();
+  }
+});
+
+closeButton.addEventListener('click', async () => {
+  await sendToBackground({ type: 'close-editor' });
+  window.close();
+});
+
+window.addEventListener('unload', () => {
+  chrome.runtime.sendMessage({ type: 'close-editor' });
+});
+
+deckSelect.addEventListener('change', async (event) => {
+  await chrome.storage.session.set({ currentDeck: event.target.value });
+});
+
+captureMoreButton.addEventListener('click', captureMore);
 addNoteButton.addEventListener('click', addNote);
 clearButton.addEventListener('click', clearCapture);
 
