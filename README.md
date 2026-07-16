@@ -1,84 +1,78 @@
 # Anki Capture Extension
 
-Anki Capture is a lightweight, high-performance Chrome Extension designed to streamline your flashcard creation workflow. It allows you to instantly extract text selections or snip custom screen regions directly from your browser and load them into a dedicated card editor that syncs with Anki via AnkiConnect.
+Anki Capture is a Chrome extension for turning study material from the browser into Anki cards with as little friction as possible. It supports fast text capture, screenshot area capture, multi-capture card building, and final review in an editor before sending the note to Anki through AnkiConnect.
 
 ## Features
 
-* **Text Capture Mode**: Highlight any text on a webpage, and it will be sent straight into the `Back` field of a new card, automatically formatted with source attribution (Page Title and URL).
-* **Area Selection (Snipping)**: Drag and drop a selection box over any visual on the screen. The extension crops the region perfectly—even handling High-DPI/Retina screen pixel densities—and embeds the image directly into your card preview.
-* **Integrated Note Editor**: Review, modify, add tags, select target decks, and customize the `Front` or `Back` of your cards in a dedicated popup window before pushing them to Anki.
-* **Local Dataset Archiving**: Automatically appends an entry of your captures to a local server backend for data backup or custom parsing.
-
----
-
-## Architecture Overview
-
-The extension is modularly split across four key script layers to adhere to Chrome's Manifest V3 security standards:
-
-
-```
-
-├── content/
-│   ├── content.js        # Handles the global injection, UI toolbar toggle, and text listeners
-│   ├── overlay.js        # UI layer rendering the interactive area-selection snipping frame
-│   └── overlay.css       # Visual styles for the drawing box overlay
-├── background.js         # The Service Worker background script coordinating APIs and state
-└── popup/
-├── editor.html       # The card review user interface window
-└── editor.js         # Manages input formatting, asset injection, and Anki Connect integration
-
-```
-
----
+* **Shortcut-first capture**: Press `Ctrl+Shift+Y` on Windows/Linux or `Command+Shift+Y` on macOS to open capture mode on the current page.
+* **Text capture**: Choose `Text`, highlight webpage text, and the selection is appended to the card's `Back` field.
+* **Area capture**: Choose `Area`, drag over part of the page, and the cropped image is appended to the card.
+* **Multi-capture cards**: Keep capturing text snippets and image regions into the same pending card, then review everything together.
+* **Integrated note editor**: Edit `Front`, `Back`, tags, note type, and deck before adding the note to Anki.
+* **Anki media handling**: Captured images are stored through AnkiConnect media before the note is added.
+* **Optional dataset logging**: A local append server can archive capture input and final note output for later analysis.
 
 ## Prerequisites
 
-Before utilizing the extension, make sure you have the following active configuration:
-1. **Anki Desktop** application installed and running locally.
-2. The **AnkiConnect** add-on installed inside Anki (Add-on ID: `8765`).
-3. (Optional) A local dataset storage server running at `http://127.0.0.1:9876/append` to receive automated data logs.
-
----
+1. Anki Desktop installed and running locally.
+2. The AnkiConnect add-on installed in Anki.
+3. Optional: run `node dataset_server.js` to append capture logs to `anki_capture_dataset.json`.
 
 ## Installation
 
-1. Clone or download this repository to your local machine.
-2. Open Google Chrome and navigate to `chrome://extensions/`.
-3. Enable **Developer mode** by toggling the switch in the top-right corner.
-4. Click **Load unpacked** in the top-left corner and select the root directory containing the extension files.
+1. Clone or download this repository.
+2. Open Chrome and go to `chrome://extensions/`.
+3. Enable **Developer mode**.
+4. Click **Load unpacked** and select this project directory.
+5. After code changes, reload the unpacked extension from `chrome://extensions/`.
 
----
+## User Flow
 
-## How It Works
+1. Start capture from the extension popup or with `Ctrl+Shift+Y` / `Command+Shift+Y`.
+2. Use the page toolbar:
+   * `Text` or keyboard `T` to capture highlighted text.
+   * `Area` or keyboard `A` to capture a page region.
+   * `Esc` or `Cancel` to leave capture mode.
+3. The editor opens with captured content in the `Back` field.
+4. Use **Capture More** to return to the source page and append more content to the same card.
+5. Fill in the `Front` field, adjust deck/tags/note type, and click **Add Note**.
 
-### Step 1: Initialize Capture
-Trigger the extension via its action popup or shortcut. The action fires a `capture-start` instruction to the active background worker which injects the toolbar on the page.
+Captured page title, URL, and timestamp are kept in capture metadata for logging, but are not inserted into the card fields.
 
-### Step 2: Select Your Mode
-* **Text Selection**: Click the option on the toolbar, then highlight any text on the page. On release (`mouseup`), the text is compiled and saved.
-* **Area Selection**: Click the option to launch the transparent overlay canvas layer. Drag across the interface to select a visual frame. The system registers the coordinates scaled properly against your monitor's `devicePixelRatio`.
+## Architecture
 
-### Step 3: Edit and Sync
-The background service worker fires a crisp `chrome.tabs.captureVisibleTab` screen snap (for area mode), processes it inside an automated `OffscreenCanvas` environment, saves the snapshot to local storage, and pops open the Note Editor window. Fill in your fields, select a deck, and hit **Add Note** to sync instantly with Anki.
+```text
+content/
+  content.js          Area-selection overlay and screenshot selection events
+  overlay.js          Capture toolbar and text-selection flow
+  overlay.css         Toolbar and selection styles
+background/
+  service_worker.js   Chrome message router, storage, AnkiConnect, image crop/media handling
+popup/
+  popup.html          Small launcher/deck popup
+  popup.js            Launcher behavior and deck creation
+  editor.html         Card review/editor window
+  editor.js           Multi-capture rendering and Add Note flow
+dataset_server.js     Optional local capture log append server
+```
 
----
+## Message Reference
 
-## API & Message References
+| Message Type | Purpose |
+| --- | --- |
+| `capture-start` | Opens capture toolbar on the active tab |
+| `capture-more` | Reopens capture toolbar for the current pending card |
+| `capture-text` | Appends selected text to capture storage |
+| `capture-area-selection` | Crops and appends a selected screenshot region |
+| `get-capture-data` | Loads pending captures into the editor |
+| `clear-capture-data` | Clears pending captures |
+| `anki-get-decks` | Loads Anki deck names |
+| `anki-create-deck` | Creates a deck through AnkiConnect |
+| `anki-add-note` | Stores captured media and adds the final note |
 
-The extension coordinates internal workflows using `chrome.runtime.sendMessage` protocols:
-
-| Message Type | Scope | Description |
-| :--- | :--- | :--- |
-| `capture-start` | Popup $\rightarrow$ Content | Spawns the main interactions option menu bar overlay |
-| `capture-text` | Content $\rightarrow$ Background | Packs string highlights with page metadata parameters |
-| `capture-area-selection` | Overlay $\rightarrow$ Background | Sends scaled canvas dimensions to request a visible tab crop |
-| `anki-get-decks` | Editor $\rightarrow$ Background | Requests active deck collection configurations out of AnkiConnect |
-| `anki-add-note` | Editor $\rightarrow$ Background | Compiles final payload fields to execute `addNote` in Anki |
-
----
 ## Images
-![Main popup](image.png)
-![alt text](image-1.png)
-![alt text](image-2.png)
 
-Automatically ingested into ANKI ![alt text](image-3.png)
+![Main popup](image.png)
+![Editor](image-1.png)
+![Capture flow](image-2.png)
+![Anki result](image-3.png)
